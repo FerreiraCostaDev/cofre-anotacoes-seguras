@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:8000/api"
+API_URL = "https://cofre-anotacoes-seguras.onrender.com/api"
 
 st.set_page_config(page_title="Cofre de Notas Seguras", page_icon="🔐")
 st.title("🔐 Cofre de Anotações Seguras")
