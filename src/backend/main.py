@@ -2,7 +2,11 @@ from fastapi import FastAPI, HTTPException, status, Depends, Header
 from typing import Optional
 from pydantic import BaseModel
 from jose import jwt, JWTError
+from sqlalchemy.orm import Session
+
 from config.settings import settings
+from src.backend.database import engine, Base, get_db
+from src.backend.models import UsuarioModel, NotaModel
 from src.backend.security import (
     UsuarioRegistroSchema,
     gerar_hash_senha,
@@ -10,11 +14,10 @@ from src.backend.security import (
     criar_token_acesso
 )
 
-app = FastAPI(title="MVP - Cofre de Anotações Seguras")
+# Cria as tabelas no SQLite no startup
+Base.metadata.create_all(bind=engine)
 
-# Simulação de Banco de Dados
-db_usuarios = {}
-db_notas = []
+app = FastAPI(title="MVP - Cofre de Anotações Seguras")
 
 class NotaSchema(BaseModel):
     titulo: str
@@ -34,60 +37,86 @@ def obter_usuario_atual(authorization: Optional[str] = Header(None)) -> str:
     except JWTError:
         raise HTTPException(status_code=401, detail="Sessão expirada ou inválida.")
 
+# --- REGISTRO ---
 @app.post("/api/registrar", status_code=201)
-def registrar(usuario: UsuarioRegistroSchema):
-    if usuario.email in db_usuarios:
+def registrar(usuario: UsuarioRegistroSchema, db: Session = Depends(get_db)):
+    user_existente = db.query(UsuarioModel).filter(UsuarioModel.email == usuario.email).first()
+    if user_existente:
         raise HTTPException(status_code=400, detail="Email já cadastrado.")
     
-    db_usuarios[usuario.email] = {
-        "nome": usuario.nome,
-        "email": usuario.email,
-        "senha_hash": gerar_hash_senha(usuario.senha)
-    }
+    novo_usuario = UsuarioModel(
+        nome=usuario.nome,
+        email=usuario.email,
+        senha_hash=gerar_hash_senha(usuario.senha)
+    )
+    db.add(novo_usuario)
+    db.commit()
     return {"mensagem": "Usuário cadastrado com sucesso!"}
 
+# --- LOGIN ---
 @app.post("/api/login")
-def login(dados: dict):
-    usuario = db_usuarios.get(dados.get("email"))
-    if not usuario or not verificar_senha(dados.get("senha", ""), usuario["senha_hash"]):
+def login(dados: dict, db: Session = Depends(get_db)):
+    usuario = db.query(UsuarioModel).filter(UsuarioModel.email == dados.get("email")).first()
+    if not usuario or not verificar_senha(dados.get("senha", ""), usuario.senha_hash):
         raise HTTPException(status_code=401, detail="Credenciais inválidas.")
     
-    token = criar_token_acesso(data={"sub": usuario["email"]})
+    token = criar_token_acesso(data={"sub": usuario.email})
     return {"access_token": token, "token_type": "bearer"}
 
+# --- CRIAR NOTA ---
 @app.post("/api/notas", status_code=201)
-def criar_nota(nota: NotaSchema, usuario_email: str = Depends(obter_usuario_atual)):
-    nova_nota = {
-        "id": len(db_notas) + 1,
-        "usuario": usuario_email,
-        "titulo": nota.titulo,
-        "conteudo": nota.conteudo
-    }
-    db_notas.append(nova_nota)
-    return {"mensagem": "Nota salva com sucesso!", "nota": nova_nota}
+def criar_nota(
+    nota: NotaSchema, 
+    usuario_email: str = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db)
+):
+    nova_nota = NotaModel(
+        titulo=nota.titulo,
+        conteudo=nota.conteudo,
+        usuario_email=usuario_email
+    )
+    db.add(nova_nota)
+    db.commit()
+    db.refresh(nova_nota)
+    return {"mensagem": "Nota salva com sucesso!", "nota": {"id": nova_nota.id, "titulo": nova_nota.titulo, "conteudo": nova_nota.conteudo}}
 
+# --- LISTAR NOTAS ---
 @app.get("/api/notas")
-def listar_notas(usuario_email: str = Depends(obter_usuario_atual)):
-    notas_usuario = [n for n in db_notas if n["usuario"] == usuario_email]
-    return {"notas": notas_usuario}
+def listar_notas(
+    usuario_email: str = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db)
+):
+    notas = db.query(NotaModel).filter(NotaModel.usuario_email == usuario_email).all()
+    return {"notas": [{"id": n.id, "titulo": n.titulo, "conteudo": n.conteudo} for n in notas]}
 
-# --- ROTA DE EDIÇÃO DE NOTA (PUT) ---
+# --- ATUALIZAR NOTA ---
 @app.put("/api/notas/{nota_id}")
-def atualizar_nota(nota_id: int, nota_atualizada: NotaSchema, usuario_email: str = Depends(obter_usuario_atual)):
-    for n in db_notas:
-        if n["id"] == nota_id and n["usuario"] == usuario_email:
-            n["titulo"] = nota_atualizada.titulo
-            n["conteudo"] = nota_atualizada.conteudo
-            return {"mensagem": "Nota atualizada com sucesso!", "nota": n}
-    raise HTTPException(status_code=404, detail="Nota não encontrada.")
-
-# --- ROTA DE EXCLUSÃO DE NOTA (DELETE) ---
-@app.delete("/api/notas/{nota_id}")
-def deletar_nota(nota_id: int, usuario_email: str = Depends(obter_usuario_atual)):
-    global db_notas
-    nota_existente = next((n for n in db_notas if n["id"] == nota_id and n["usuario"] == usuario_email), None)
-    if not nota_existente:
+def atualizar_nota(
+    nota_id: int, 
+    nota_atualizada: NotaSchema, 
+    usuario_email: str = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db)
+):
+    nota = db.query(NotaModel).filter(NotaModel.id == nota_id, NotaModel.usuario_email == usuario_email).first()
+    if not nota:
         raise HTTPException(status_code=404, detail="Nota não encontrada.")
     
-    db_notas = [n for n in db_notas if not (n["id"] == nota_id and n["usuario"] == usuario_email)]
+    nota.titulo = nota_atualizada.titulo
+    nota.conteudo = nota_atualizada.conteudo
+    db.commit()
+    return {"mensagem": "Nota atualizada com sucesso!"}
+
+# --- EXCLUIR NOTA ---
+@app.delete("/api/notas/{nota_id}")
+def deletar_nota(
+    nota_id: int, 
+    usuario_email: str = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db)
+):
+    nota = db.query(NotaModel).filter(NotaModel.id == nota_id, NotaModel.usuario_email == usuario_email).first()
+    if not nota:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+    
+    db.delete(nota)
+    db.commit()
     return {"mensagem": "Nota excluída com sucesso!"}
