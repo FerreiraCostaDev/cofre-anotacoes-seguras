@@ -33,7 +33,7 @@ if menu == "Cadastro":
                 res = requests.post(
                     f"{API_URL}/registrar", 
                     json={"nome": nome, "email": email, "senha": senha},
-                    timeout=10
+                    timeout=60
                 )
                 
                 if res.status_code in [200, 201]:
