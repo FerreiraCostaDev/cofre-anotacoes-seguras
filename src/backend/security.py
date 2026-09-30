@@ -32,12 +32,14 @@ class UsuarioRegistroSchema(BaseModel):
     senha: str
 
     @field_validator('senha')
+    @classmethod
     def validar_senha(cls, v):
         if len(v) < 8:
             raise ValueError('A senha deve ter pelo menos 8 caracteres.')
         return v
 
-@field_validator('nome')
+    @field_validator('nome')
+    @classmethod
     def sanitizar_nome(cls, v):
         nome_limpo = re.sub(r'[<>]', '', v).strip()
         if not nome_limpo:
