@@ -1,19 +1,24 @@
+import os
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Cria o arquivo sqlite local "cofre.db" na raiz do projeto
-SQLALCHEMY_DATABASE_URL = "sqlite:///./cofre.db"
+load_dotenv()
 
-# connect_args={"check_same_thread": False} é necessário apenas para SQLite
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Variável de ambiente DATABASE_URL não configurada.")
+
+# Algumas URLs vêm como postgres://, mas o SQLAlchemy exige postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-# Dependency do FastAPI para abrir e fechar conexões com o banco por requisição
 def get_db():
     db = SessionLocal()
     try:
