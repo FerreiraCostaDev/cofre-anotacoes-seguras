@@ -37,7 +37,7 @@ class UsuarioRegistroSchema(BaseModel):
             raise ValueError('A senha deve ter pelo menos 8 caracteres.')
         return v
 
-    @field_validator('nome')
+@field_validator('nome')
     def sanitizar_nome(cls, v):
         nome_limpo = re.sub(r'[<>]', '', v).strip()
         if not nome_limpo:
